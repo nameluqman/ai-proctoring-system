@@ -16,6 +16,12 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Local Screenshot Evidence
+
+When the candidate is sharing their screen, detected mistake events capture a JPEG and save it under `data/evidence/<roomId>/`. Event metadata is stored alongside it in that room's `index.json` file. The proctor dashboard polls for new captures every 2.5 seconds. Evidence storage requires no external database or Docker service.
+
+Screenshots are only available when the candidate has an active screen-share stream. Keep `data/evidence/` on persistent storage if captures need to survive deployments, and protect evidence access with your authentication and retention policy. The existing PeerJS signaling/STUN configuration and MediaPipe model downloads still use network services; fully offline candidate/proctor sessions require localizing those separately.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
