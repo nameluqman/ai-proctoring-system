@@ -159,7 +159,6 @@ function ProctorContent() {
           eventType !== "WINDOW_FOCUS" &&
           eventType !== "MOUSE_ENTER" &&
           eventType !== "AI_LISTENING_DETECTED" &&
-          eventType !== "AUDIO_ANOMALY_DETECTED" &&
           eventType !== "AI_AUDIO_DETECTED"
         ) {
           const awayStartedAt = Date.now();
@@ -205,7 +204,6 @@ function ProctorContent() {
             setGazeDeviationCount((c) => c + 1);
             break;
           case "AI_LISTENING_DETECTED":
-          case "AUDIO_ANOMALY_DETECTED":
           case "AI_AUDIO_DETECTED":
             setAudioAiAlertCount((c) => c + 1);
             break;
