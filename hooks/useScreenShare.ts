@@ -1,23 +1,13 @@
 import { useState, useRef, useCallback } from "react";
 
 export const SCREEN_SHARE_REJECTION_MESSAGE =
-  "Screen sharing rejected. Only the Entire Screen with System Audio is allowed. Select Entire Screen, Enable Share system audio, and Click Share.";
+  "Screen sharing is unavailable or permission was denied. Continue with webcam and microphone, or try a supported desktop browser.";
 
 export function useScreenShare(onEndedCallback?: () => void) {
   const [isSharing, setIsSharing] = useState<boolean>(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
-  const validateMonitorSelection = useCallback((mediaStream: MediaStream) => {
-    const videoTrack = mediaStream.getVideoTracks()[0];
-    if (!videoTrack) return false;
-
-    const settings = videoTrack.getSettings() as any;
-    const displaySurface = settings?.displaySurface;
-
-    return !displaySurface || displaySurface === "monitor";
-  }, []);
 
   const startShare = useCallback(async () => {
     setShareError(null);
@@ -35,26 +25,18 @@ export function useScreenShare(onEndedCallback?: () => void) {
     try {
       const mediaStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          displaySurface: "monitor",
           frameRate: { ideal: 30, max: 60 },
-          cursor: "always",
-        } as any,
-        audio: true,
+        },
+        audio: false,
       });
 
-      const selectionError = validateMonitorSelection(mediaStream);
-      if (!selectionError) {
+      const videoTrack = mediaStream.getVideoTracks()[0];
+      if (!videoTrack) {
         mediaStream.getTracks().forEach((track) => track.stop());
         setShareError(SCREEN_SHARE_REJECTION_MESSAGE);
         return null;
       }
 
-      const videoTrack = mediaStream.getVideoTracks()[0];
-      if (mediaStream.getAudioTracks().length === 0) {
-        mediaStream.getTracks().forEach((track) => track.stop());
-        setShareError(SCREEN_SHARE_REJECTION_MESSAGE);
-        return null;
-      }
       videoTrack.onended = () => {
         setIsSharing(false);
         setStream(null);
@@ -71,7 +53,7 @@ export function useScreenShare(onEndedCallback?: () => void) {
       setShareError(SCREEN_SHARE_REJECTION_MESSAGE);
       return null;
     }
-  }, [onEndedCallback, validateMonitorSelection]);
+  }, [onEndedCallback]);
 
   const stopShare = useCallback(() => {
     if (streamRef.current) {

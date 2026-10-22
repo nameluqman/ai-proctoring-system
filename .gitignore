@@ -35,6 +35,8 @@ yarn-error.log*
 
 # Locally stored candidate screenshot evidence
 /data/evidence/
+/public/models/yolo11n.onnx
+/public/models/aasist-l.onnx
 
 # vercel
 .vercel

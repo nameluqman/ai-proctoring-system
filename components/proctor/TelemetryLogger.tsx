@@ -63,12 +63,12 @@ export default function TelemetryLogger({ logs, scratchpadText = "", evidenceSna
 
       <section className="mt-4 border-t border-slate-800 pt-4" aria-label="Recent candidate screenshots">
         <div className="mb-2 flex items-center justify-between">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Mistake Screenshots</p>
+          <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Review Screenshots</p>
           <span className="text-[10px] font-mono text-slate-500">{evidenceSnapshots.length} saved</span>
         </div>
         {evidenceSnapshots.length === 0 ? (
           <p className="rounded-lg border border-dashed border-slate-700 px-3 py-4 text-center text-xs text-slate-500">
-            Screenshots appear when a mistake is detected during screen sharing.
+            Screenshots may be captured from the webcam or screen when a review event is detected.
           </p>
         ) : (
           <div className="max-h-[420px] overflow-y-auto pr-1">
@@ -84,7 +84,7 @@ export default function TelemetryLogger({ logs, scratchpadText = "", evidenceSna
                 >
                   <Image
                     src={snapshot.imageUrl}
-                    alt={`Screen at ${snapshot.type}`}
+                    alt={`Evidence for ${snapshot.type}`}
                     width={640}
                     height={360}
                     unoptimized

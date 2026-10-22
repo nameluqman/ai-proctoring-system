@@ -6,6 +6,12 @@ export interface EventLog {
   timestamp: string;
 }
 
+export interface HeadPoseAngles {
+  pitch: number;
+  yaw: number;
+  roll: number;
+}
+
 export interface MetricsStats {
   tabSwitches: number;
   windowBlurs: number;

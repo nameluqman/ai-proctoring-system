@@ -1,6 +1,6 @@
 // components/proctor/MetricsCards.tsx
 import React from "react";
-import { Layers, Eye, Copy, MousePointer2Off, MonitorX, Volume2 } from "lucide-react";
+import { Layers, Eye, Copy, MousePointer2Off, MonitorX, AudioLines } from "lucide-react";
 
 interface MetricsCardsProps {
   totalViolations: number;
@@ -14,7 +14,8 @@ interface MetricsCardsProps {
     multipleFaceCount: number;
     noFaceCount: number;
     gazeDeviationCount: number;
-    audioAiAlertCount: number;
+    aiFocusAlertCount: number;
+    syntheticAudioAlertCount: number;
     sharedDisplayMismatchCount: number;
   };
 }
@@ -125,10 +126,18 @@ export default function MetricsCards({ totalViolations, screenAwaySeconds, stats
       </div>
 
       <div className="flex min-h-[66px] items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-2 sm:px-3">
-        <Volume2 className="h-4 w-4 shrink-0 text-cyan-300" />
+        <Eye className="h-4 w-4 shrink-0 text-cyan-300" />
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase leading-tight text-slate-400">Audio / AI Alerts</p>
-          <p className="mt-0.5 text-base font-bold leading-none text-cyan-300">{stats.audioAiAlertCount}</p>
+          <p className="text-[10px] font-semibold uppercase leading-tight text-slate-400">AI / Focus Alerts</p>
+          <p className="mt-0.5 text-base font-bold leading-none text-cyan-300">{stats.aiFocusAlertCount}</p>
+        </div>
+      </div>
+
+      <div className="flex min-h-[66px] items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-2 sm:px-3">
+        <AudioLines className="h-4 w-4 shrink-0 text-fuchsia-300" />
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase leading-tight text-slate-400">Possible Synthetic Audio</p>
+          <p className="mt-0.5 text-base font-bold leading-none text-fuchsia-300">{stats.syntheticAudioAlertCount}</p>
         </div>
       </div>
 

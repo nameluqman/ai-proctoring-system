@@ -1,14 +1,31 @@
 declare module "@mediapipe/tasks-vision" {
+  export interface NormalizedLandmark {
+    x: number;
+    y: number;
+    z?: number;
+  }
+
+  export interface DetectionResult {
+    detections: Array<{
+      boundingBox?: { originX: number; originY: number; width: number; height: number };
+      categories?: Array<{ categoryName: string; score: number }>;
+    }>;
+  }
+
+  export interface FaceLandmarkerResult {
+    faceLandmarks: NormalizedLandmark[][];
+  }
+
   export class FilesetResolver {
     static forVisionTasks(url: string): Promise<FilesetResolver>;
   }
 
-  export class ObjectDetector {
+  export class FaceDetector {
     static createFromOptions(
       resolver: FilesetResolver,
       options: Record<string, unknown>
-    ): Promise<ObjectDetector>;
-    detectForVideo(video: HTMLVideoElement, timestamp: number): { detections?: any[] };
+    ): Promise<FaceDetector>;
+    detectForVideo(video: HTMLVideoElement, timestamp: number): DetectionResult;
     close(): void;
   }
 
@@ -17,7 +34,7 @@ declare module "@mediapipe/tasks-vision" {
       resolver: FilesetResolver,
       options: Record<string, unknown>
     ): Promise<FaceLandmarker>;
-    detectForVideo(video: HTMLVideoElement, timestamp: number): { faceLandmarks?: any[] };
+    detectForVideo(video: HTMLVideoElement, timestamp: number): FaceLandmarkerResult;
     close(): void;
   }
 }

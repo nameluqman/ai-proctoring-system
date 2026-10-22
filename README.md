@@ -20,10 +20,10 @@ A production-grade, real-time assessment and remote proctoring platform built wi
 
 ## 🚀 Key Features
 
-### 1. Computer Vision & Webcam AI (MediaPipe)
-* **Phone Detection:** Real-time object tracking to identify unauthorized electronic devices.
-* **Face Presence Tracking:** Instant alerts for *No Face* detected or *Multiple Faces* in the webcam frame.
-* **Gaze & Head Pose Deviation:** Heuristic tracking of candidate head/gaze movement away from the screen.
+### 1. Computer Vision & Webcam AI
+* **Phone Detection:** YOLOv8n/YOLO11n ONNX inference in the browser, with a multi-frame confirmation buffer.
+* **Face Presence Tracking:** MediaPipe BlazeFace full-range detection for *No Face* and *Multiple Faces* alerts.
+* **Gaze & Head Pose Deviation:** 3D landmark-based PnP estimates pitch, yaw, and roll to reduce false gaze alerts.
 
 ### 2. Browser Telemetry & Activity Signals
 * **Tab Switching & Unfocus:** Detects visibility changes when candidates switch tabs or click away from the assessment window.
@@ -31,8 +31,8 @@ A production-grade, real-time assessment and remote proctoring platform built wi
 * **Display Mismatch Detection:** Monitors viewport constraints (e.g., width < 1024px or split-screen/resizing behavior) with safety buffers.
 
 ### 3. Audio & System Monitoring
-* **Sustained Audio Anomaly Detection:** Uses the Web Audio API to monitor microphone streams and flag continuous loud noises or speech.
-* **Permission-Based Screen Sharing:** Secure PeerJS/WebRTC video and audio streaming for live proctor oversight.
+* **Candidate Microphone:** Candidates can explicitly enable or disable their microphone; proctors receive a separate audio stream and choose when to unmute it. While enabled, AASIST-L locally screens audio for possible synthetic speech and saves a webcam screenshot for review after repeated high-score windows.
+* **Optional Screen Sharing:** Secure PeerJS/WebRTC screen video sharing when supported by the candidate's browser. Screen audio is not required.
 
 ### 4. Live Proctor Dashboard
 * **Real-time Telemetry Logger:** Centralized event stream with timestamped violation logs.
@@ -46,8 +46,8 @@ A production-grade, real-time assessment and remote proctoring platform built wi
 * **Frontend & Backend:** Next.js (App Router), React, TypeScript
 * **Styling:** Tailwind CSS
 * **Real-time Communication:** PeerJS / WebRTC
-* **AI / Computer Vision:** MediaPipe (Tasks Vision / FaceLandmarker / ObjectDetector)
-* **Audio Processing:** Web Audio API (RMS & frequency analysis)
+* **AI / Computer Vision:** ONNX Runtime Web (YOLOv8n/YOLO11n), MediaPipe Tasks Vision (BlazeFace and FaceLandmarker)
+* **Audio:** WebRTC microphone audio and experimental AASIST-L anti-spoof screening in ONNX Runtime Web
 
 ---
 
@@ -83,6 +83,16 @@ Run the development server:
 Bash
 npm run dev
 Open http://localhost:3000 in your browser to view the application. (Note: Camera, microphone, and screen share features require a secure context or localhost setup).
+
+### Model setup
+
+`npm run dev` automatically downloads and SHA-256 verifies the official YOLO11n and AASIST-L ONNX models to `public/models/` on first run; subsequent runs reuse verified files. `npm run build` also prepares the models for production builds. Model files are ignored by Git and are not committed to the repository. An internet connection is required for the first download.
+
+BlazeFace and FaceLandmarker weights are loaded client-side from the MediaPipe model hosting endpoints. Those model requests require an internet connection.
+
+**Audio screening limitations:** AASIST-L processes the candidate's audio locally while their microphone is enabled. Two consecutive windows must score at least 90% synthetic before a `SYNTHETIC_AUDIO_SUSPECTED` event and webcam screenshot are sent for proctor review. This score is not a calibrated probability or proof of AI use. Published benchmark results vary greatly by recording conditions (including 44.45% equal-error rate on InTheWild audio); expect false alerts and missed detections, especially for speaker-to-microphone recordings. Candidate microphone audio is still transmitted to the proctor using the existing WebRTC connection.
+
+To use a different compatible model, set `NEXT_PUBLIC_YOLO_MODEL_URL` to a same-origin path or CORS-enabled URL. This skips downloading the default YOLO11n model. The detector expects 640×640 raw detection output with the COCO `cell phone` class. The official Ultralytics pretrained weights are distributed under AGPL-3.0; review the model license before distributing the app or using it commercially.
 
 🛡️ Heuristics & Disclaimer
 Proctoring telemetry signals act as review heuristics and indicators for human proctors rather than absolute automated legal proof, ensuring balanced oversight and minimal false-penalization.

@@ -1,16 +1,33 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { Mic, MicOff } from "lucide-react";
+import type { AudioSpoofMonitorStatus } from "@/hooks/useAudioSpoofMonitor";
 
 interface WebcamFeedProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  onStream: (stream: MediaStream) => void;
+  onMicrophoneStream: (stream: MediaStream | null) => void;
+  audioSpoofMonitorStatus: AudioSpoofMonitorStatus;
 }
 
-export default function WebcamFeed({ videoRef }: WebcamFeedProps) {
+export default function WebcamFeed({
+  videoRef,
+  onStream,
+  onMicrophoneStream,
+  audioSpoofMonitorStatus,
+}: WebcamFeedProps) {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [microphoneStream, setMicrophoneStream] = useState<MediaStream | null>(null);
+  const [microphoneLoading, setMicrophoneLoading] = useState(false);
+  const [microphoneError, setMicrophoneError] = useState<string | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const mountedRef = useRef(false);
 
   useEffect(() => {
     let stream: MediaStream | null = null;
+    let cancelled = false;
+    mountedRef.current = true;
 
     const startCamera = async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -28,11 +45,20 @@ export default function WebcamFeed({ videoRef }: WebcamFeedProps) {
           audio: false,
         });
 
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
         const video = videoRef.current;
-        if (!video) return;
+        if (!video) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
 
         video.srcObject = stream;
         await video.play();
+        onStream(stream);
         setStatus("ready");
       } catch (error) {
         console.warn("Webcam access failed:", error);
@@ -43,11 +69,62 @@ export default function WebcamFeed({ videoRef }: WebcamFeedProps) {
     startCamera();
 
     return () => {
+      cancelled = true;
+      mountedRef.current = false;
+      onMicrophoneStream(null);
+      const activeMicrophoneStream = microphoneStreamRef.current;
+      microphoneStreamRef.current = null;
+      activeMicrophoneStream?.getTracks().forEach((track) => track.stop());
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [videoRef]);
+  }, [onMicrophoneStream, onStream, videoRef]);
+
+  const toggleMicrophone = async () => {
+    setMicrophoneError(null);
+    if (microphoneStream) {
+      microphoneStream.getAudioTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current = null;
+      setMicrophoneStream(null);
+      onMicrophoneStream(null);
+      return;
+    }
+
+    setMicrophoneLoading(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      microphoneStreamRef.current = stream;
+      for (const track of stream.getAudioTracks()) {
+        track.onended = () => {
+          if (microphoneStreamRef.current !== stream) return;
+          microphoneStreamRef.current = null;
+          setMicrophoneStream(null);
+          onMicrophoneStream(null);
+        };
+      }
+      setMicrophoneStream(stream);
+      onMicrophoneStream(stream);
+    } catch (error) {
+      console.warn("Microphone access failed:", error);
+      if (mountedRef.current) {
+        setMicrophoneError("Microphone permission was denied or no microphone is available.");
+      }
+    } finally {
+      if (mountedRef.current) setMicrophoneLoading(false);
+    }
+  };
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 p-3 shadow-[0_18px_50px_rgba(15,23,42,0.4)]">
@@ -80,6 +157,54 @@ export default function WebcamFeed({ videoRef }: WebcamFeedProps) {
           {status === "ready" ? "Live" : status === "loading" ? "Starting" : "Unavailable"}
         </span>
       </div>
+
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-slate-400">
+          {microphoneStream
+            ? "Mic audio is shared with the proctor and screened locally for possible synthetic speech."
+            : "Allow microphone access to answer aloud. Possible synthetic-audio alerts save a webcam screenshot for proctor review."}
+        </p>
+        <button
+          type="button"
+          onClick={() => void toggleMicrophone()}
+          disabled={microphoneLoading}
+          aria-pressed={microphoneStream !== null}
+          className={[
+            "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition",
+            microphoneStream
+              ? "border-rose-700 bg-rose-950/60 text-rose-200 hover:bg-rose-900/70"
+              : "border-indigo-700 bg-indigo-950/60 text-indigo-100 hover:bg-indigo-900/70",
+          ].join(" ")}
+        >
+          {microphoneStream ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          {microphoneLoading ? "Connecting microphone..." : microphoneStream ? "Turn microphone off" : "Enable microphone"}
+        </button>
+      </div>
+      {microphoneError && (
+        <p role="alert" className="mb-3 text-xs text-rose-300">
+          {microphoneError}
+        </p>
+      )}
+      {microphoneStream && (
+        <p
+          role={audioSpoofMonitorStatus === "error" ? "alert" : "status"}
+          className={`mb-3 text-xs ${
+            audioSpoofMonitorStatus === "error"
+              ? "text-rose-300"
+              : audioSpoofMonitorStatus === "ready"
+                ? "text-emerald-300"
+                : "text-slate-400"
+          }`}
+        >
+          {audioSpoofMonitorStatus === "loading"
+            ? "Loading experimental audio screening..."
+            : audioSpoofMonitorStatus === "ready"
+              ? "Experimental AASIST-L audio screening is active. It can be wrong; alerts are not proof."
+              : audioSpoofMonitorStatus === "error"
+                ? "Audio screening is unavailable. Your microphone can still be used for the interview."
+                : ""}
+        </p>
+      )}
 
       <div className="relative overflow-hidden rounded-[1.4rem] border border-slate-700 bg-slate-950 shadow-inner shadow-slate-950/80">
         <div className="absolute inset-0 bg-gradient-to-tr from-slate-900/40 via-transparent to-slate-700/30" />

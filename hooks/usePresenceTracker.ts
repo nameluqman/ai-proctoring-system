@@ -8,6 +8,7 @@ interface PresenceTrackerProps {
 export function usePresenceTracker({ onEvent }: PresenceTrackerProps) {
   useEffect(() => {
     const lastAiSignalRef = { current: 0 };
+    let windowIsUnfocused = false;
 
     const emit = (type: string, message: string, presenceState?: boolean) => {
       onEvent(type, message, presenceState);
@@ -34,11 +35,17 @@ export function usePresenceTracker({ onEvent }: PresenceTrackerProps) {
 
     // 2. Window Unfocus / Focus
     const handleBlur = () => {
-      emit("WINDOW_UNFOCUS", "Candidate clicked away from assessment window.", false);
+      if (!document.hidden && !windowIsUnfocused) {
+        windowIsUnfocused = true;
+        emit("WINDOW_UNFOCUS", "Assessment window lost focus while its tab remained visible.", false);
+      }
     };
 
     const handleFocus = () => {
-      emit("WINDOW_FOCUS", "Candidate refocused assessment window.", true);
+      if (windowIsUnfocused) {
+        windowIsUnfocused = false;
+        emit("WINDOW_FOCUS", "Candidate refocused assessment window.", true);
+      }
     };
 
     // 3. Mouse Moved Out of Window / Returned

@@ -8,10 +8,11 @@ import Scratchpad from "@/components/candidate/Scratchpad";
 import WebcamFeed from "@/components/candidate/WebcamFeed";
 import { usePeer } from "@/hooks/usePeer";
 import { usePresenceTracker } from "@/hooks/usePresenceTracker";
-import { SCREEN_SHARE_REJECTION_MESSAGE, useScreenShare } from "@/hooks/useScreenShare";
+import { useScreenShare } from "@/hooks/useScreenShare";
 import { useWebcamAI } from "@/hooks/useWebcamAI";
-import { useAudioMonitor } from "@/hooks/useAudioMonitor";
+import { useAudioSpoofMonitor } from "@/hooks/useAudioSpoofMonitor";
 import { AlertCircle, MonitorUp, Square } from "lucide-react";
+import type { MediaConnection } from "peerjs";
 
 const MISTAKE_EVENT_TYPES = new Set([
   "TAB_SWITCH",
@@ -24,8 +25,7 @@ const MISTAKE_EVENT_TYPES = new Set([
   "NO_FACE_DETECTED",
   "GAZE_DEVIATION",
   "AI_LISTENING_DETECTED",
-  "AI_AUDIO_DETECTED",
-  "SCREEN_SHARE_REJECTED",
+  "SYNTHETIC_AUDIO_SUSPECTED",
   "SHARED_DISPLAY_MISMATCH",
 ]);
 
@@ -35,6 +35,7 @@ const WEBCAM_EVIDENCE_TYPES = new Set([
   "NO_FACE_DETECTED",
   "GAZE_DEVIATION",
   "AI_LISTENING_DETECTED",
+  "SYNTHETIC_AUDIO_SUSPECTED",
 ]);
 
 const SCREEN_TRANSITION_EVENT_TYPES = new Set(["TAB_SWITCH", "WINDOW_UNFOCUS"]);
@@ -63,6 +64,8 @@ function CandidateContent() {
 
   const { isConnected, peerReady, peerRef, dataConnRef } = usePeer(candidatePeerId, targetProctorId);
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+  const [microphoneStream, setMicrophoneStream] = useState<MediaStream | null>(null);
   const screenShareVideoRef = useRef<HTMLVideoElement | null>(null);
   const screenCaptureStreamRef = useRef<MediaStream | null>(null);
   const largestViewportRef = useRef<{ width: number; height: number } | null>(null);
@@ -112,8 +115,16 @@ function CandidateContent() {
       const scale = Math.min(1, 1600 / frameWidth);
       canvas.width = Math.round(frameWidth * scale);
       canvas.height = Math.round(frameHeight * scale);
-      canvas.getContext("2d")?.drawImage(frame, 0, 0, canvas.width, canvas.height);
-      capturedBitmap?.close();
+      const context = canvas.getContext("2d");
+      if (!context) {
+        capturedBitmap?.close();
+        throw new Error("Could not create a canvas context for the evidence screenshot.");
+      }
+      try {
+        context.drawImage(frame, 0, 0, canvas.width, canvas.height);
+      } finally {
+        capturedBitmap?.close();
+      }
 
       const screenshot = await new Promise<Blob | null>((resolve) => {
         canvas.toBlob(resolve, "image/jpeg", 0.72);
@@ -158,6 +169,20 @@ function CandidateContent() {
   );
 
   const [scratchpadText, setScratchpadText] = useState("");
+  const handleWebcamStream = useCallback((stream: MediaStream) => {
+    setWebcamStream(stream);
+  }, []);
+  const handleMicrophoneStream = useCallback((stream: MediaStream | null) => {
+    setMicrophoneStream(stream);
+  }, []);
+  const handleSyntheticAudioSuspected = useCallback(
+    (message: string) => sendTelemetryEvent("SYNTHETIC_AUDIO_SUSPECTED", message),
+    [sendTelemetryEvent]
+  );
+  const audioSpoofMonitorStatus = useAudioSpoofMonitor(
+    microphoneStream,
+    handleSyntheticAudioSuspected
+  );
 
   const handleScratchpadChange = useCallback(
     (nextValue: string) => {
@@ -176,11 +201,12 @@ function CandidateContent() {
     [dataConnRef]
   );
 
-  const webcamCallRef = useRef<any>(null);
-  const screenShareCallRef = useRef<any>(null);
+  const webcamCallRef = useRef<MediaConnection | null>(null);
+  const screenShareCallRef = useRef<MediaConnection | null>(null);
+  const microphoneCallRef = useRef<MediaConnection | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
 
-  const { isSharing: isShareActive, stream: screenShareStream, startShare, stopShare, shareError } = useScreenShare(() => {
+  const { isSharing: isShareActive, startShare, stopShare, shareError } = useScreenShare(() => {
     setIsScreenSharing(false);
     screenCaptureStreamRef.current = null;
     if (screenShareCallRef.current) {
@@ -191,12 +217,6 @@ function CandidateContent() {
       screenShareVideoRef.current.srcObject = null;
     }
     sendTelemetryEvent("SCREEN_SHARE_STOPPED", "Full screen share ended.", true);
-  });
-
-  const { prepareSystemAudioCapture } = useAudioMonitor({
-    onEvent: sendTelemetryEvent,
-    enabled: true,
-    systemAudioStream: screenShareStream,
   });
 
   const startPeerMediaCall = useCallback(
@@ -239,16 +259,8 @@ function CandidateContent() {
       return;
     }
 
-    prepareSystemAudioCapture();
     const stream = await startShare();
-    if (!stream) {
-      sendTelemetryEvent(
-        "SCREEN_SHARE_REJECTED",
-        SCREEN_SHARE_REJECTION_MESSAGE,
-        false
-      );
-      return;
-    }
+    if (!stream) return;
 
     screenCaptureStreamRef.current = stream;
     if (screenShareVideoRef.current) {
@@ -258,7 +270,28 @@ function CandidateContent() {
 
     setIsScreenSharing(true);
     startPeerMediaCall(stream, "screen", "SCREEN_SHARE_STARTED", "Candidate started full screen share.");
-  }, [isScreenSharing, isShareActive, sendTelemetryEvent, startShare, stopShare, startPeerMediaCall, prepareSystemAudioCapture]);
+  }, [isScreenSharing, isShareActive, sendTelemetryEvent, startShare, stopShare, startPeerMediaCall]);
+
+  useEffect(() => {
+    if (!peerReady || !targetProctorId || !microphoneStream) return;
+
+    const call = peerRef.current?.call(targetProctorId, microphoneStream, {
+      metadata: { source: "audio" },
+    });
+    if (!call) return;
+
+    microphoneCallRef.current = call;
+    call.on("error", (error) => {
+      console.error("Candidate microphone stream failed:", error);
+    });
+
+    return () => {
+      call.close();
+      if (microphoneCallRef.current === call) {
+        microphoneCallRef.current = null;
+      }
+    };
+  }, [peerReady, peerRef, targetProctorId, microphoneStream]);
 
   useEffect(() => {
     const checkWindowLayout = () => {
@@ -325,26 +358,15 @@ function CandidateContent() {
   });
 
   useEffect(() => {
-    if (!peerReady || !targetProctorId || !webcamVideoRef.current || isScreenSharing || isShareActive) return;
+    if (!peerReady || !targetProctorId || !webcamStream || isScreenSharing || isShareActive) return;
 
-    const video = webcamVideoRef.current as (HTMLVideoElement & { captureStream?: () => MediaStream }) | null;
-    const startWebcamCall = () => {
-      if (!video || !peerRef.current || !targetProctorId) return;
+    startPeerMediaCall(webcamStream, "webcam", "WEBCAM_STARTED", "Live candidate webcam feed initiated.");
 
-      const stream = typeof video.captureStream === "function" ? video.captureStream() : null;
-      if (!stream) return;
-
-      startPeerMediaCall(stream, "webcam", "WEBCAM_STARTED", "Live candidate webcam feed initiated.");
+    return () => {
+      webcamCallRef.current?.close();
+      webcamCallRef.current = null;
     };
-
-    const timer = window.setTimeout(() => {
-      if (video && video.readyState >= 2) {
-        startWebcamCall();
-      }
-    }, 600);
-
-    return () => window.clearTimeout(timer);
-  }, [peerReady, peerRef, targetProctorId, isScreenSharing, isShareActive, startPeerMediaCall, sendTelemetryEvent]);
+  }, [peerReady, targetProctorId, webcamStream, isScreenSharing, isShareActive, startPeerMediaCall]);
 
   // Hook for standard visibility change / focus tracking
   usePresenceTracker({ onEvent: sendTelemetryEvent });
@@ -376,7 +398,7 @@ function CandidateContent() {
       <main className="flex-1 max-w-6xl w-full mx-auto p-6 space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-slate-400 uppercase tracking-[0.2em]">
-            Share mode: full screen with system audio
+            Screen sharing is optional; use your microphone for spoken answers
           </div>
           <button
             type="button"
@@ -389,7 +411,7 @@ function CandidateContent() {
             ].join(" ")}
           >
             {isScreenSharing || isShareActive ? <Square className="h-4 w-4" /> : <MonitorUp className="h-4 w-4" />}
-            {isScreenSharing || isShareActive ? "Stop Full Screen Share" : "Share Full Screen"}
+            {isScreenSharing || isShareActive ? "Stop Screen Share" : "Share Screen"}
           </button>
         </div>
 
@@ -401,7 +423,12 @@ function CandidateContent() {
         )}
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <WebcamFeed videoRef={webcamVideoRef} />
+          <WebcamFeed
+            videoRef={webcamVideoRef}
+            onStream={handleWebcamStream}
+            onMicrophoneStream={handleMicrophoneStream}
+            audioSpoofMonitorStatus={audioSpoofMonitorStatus}
+          />
 
           <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 p-3 shadow-[0_18px_50px_rgba(15,23,42,0.4)]">
             <div className="mb-3 flex items-center justify-between gap-3 px-1">
@@ -439,8 +466,8 @@ function CandidateContent() {
               {!isScreenSharing && !isShareActive && !shareError && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70 text-center p-6">
                   <div className="space-y-2">
-                    <p className="text-xs uppercase tracking-[0.26em] text-slate-400">Full Screen + Audio Required</p>
-                    <p className="text-sm text-slate-200">Share the entire screen and enable system audio.</p>
+                    <p className="text-xs uppercase tracking-[0.26em] text-slate-400">Optional screen share</p>
+                    <p className="text-sm text-slate-200">Enable your microphone in the webcam panel to answer aloud.</p>
                   </div>
                 </div>
               )}

@@ -51,6 +51,7 @@ function ProctorContent() {
   
   const [hasLiveFeed, setHasLiveFeed] = useState<boolean>(false);
   const [hasScreenFeed, setHasScreenFeed] = useState<boolean>(false);
+  const [hasAudioFeed, setHasAudioFeed] = useState<boolean>(false);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [evidenceSnapshots, setEvidenceSnapshots] = useState<EvidenceSnapshot[]>([]);
   const [mouseDepartures, setMouseDepartures] = useState(0);
@@ -61,7 +62,8 @@ function ProctorContent() {
   const [multipleFaceCount, setMultipleFaceCount] = useState(0);
   const [noFaceCount, setNoFaceCount] = useState(0);
   const [gazeDeviationCount, setGazeDeviationCount] = useState(0);
-  const [audioAiAlertCount, setAudioAiAlertCount] = useState(0);
+  const [aiFocusAlertCount, setAiFocusAlertCount] = useState(0);
+  const [syntheticAudioAlertCount, setSyntheticAudioAlertCount] = useState(0);
   const [sharedDisplayMismatchCount, setSharedDisplayMismatchCount] = useState(0);
   const [screenAwaySeconds, setScreenAwaySeconds] = useState(0);
   const [screenAwaySince, setScreenAwaySince] = useState<number | null>(null);
@@ -78,7 +80,8 @@ function ProctorContent() {
     multipleFaceCount +
     noFaceCount +
     gazeDeviationCount +
-    audioAiAlertCount +
+    aiFocusAlertCount +
+    syntheticAudioAlertCount +
     sharedDisplayMismatchCount;
 
   useEffect(() => {
@@ -158,8 +161,7 @@ function ProctorContent() {
           eventType !== "TAB_RETURN" &&
           eventType !== "WINDOW_FOCUS" &&
           eventType !== "MOUSE_ENTER" &&
-          eventType !== "AI_LISTENING_DETECTED" &&
-          eventType !== "AI_AUDIO_DETECTED"
+          eventType !== "AI_LISTENING_DETECTED"
         ) {
           const awayStartedAt = Date.now();
           activeAwaySinceRef.current ??= awayStartedAt;
@@ -204,8 +206,10 @@ function ProctorContent() {
             setGazeDeviationCount((c) => c + 1);
             break;
           case "AI_LISTENING_DETECTED":
-          case "AI_AUDIO_DETECTED":
-            setAudioAiAlertCount((c) => c + 1);
+            setAiFocusAlertCount((c) => c + 1);
+            break;
+          case "SYNTHETIC_AUDIO_SUSPECTED":
+            setSyntheticAudioAlertCount((c) => c + 1);
             break;
           case "SHARED_DISPLAY_MISMATCH":
             setSharedDisplayMismatchCount((c) => c + 1);
@@ -243,7 +247,8 @@ function ProctorContent() {
     setMultipleFaceCount(0);
     setNoFaceCount(0);
     setGazeDeviationCount(0);
-    setAudioAiAlertCount(0);
+    setAiFocusAlertCount(0);
+    setSyntheticAudioAlertCount(0);
     setSharedDisplayMismatchCount(0);
     setScreenAwaySeconds(0);
     setScreenAwaySince(null);
@@ -275,7 +280,8 @@ function ProctorContent() {
             multipleFaceCount,
             noFaceCount,
             gazeDeviationCount,
-            audioAiAlertCount,
+            aiFocusAlertCount,
+            syntheticAudioAlertCount,
             sharedDisplayMismatchCount,
           }}
         />
@@ -286,6 +292,8 @@ function ProctorContent() {
             setHasLiveFeed={setHasLiveFeed}
             hasScreenFeed={hasScreenFeed}
             setHasScreenFeed={setHasScreenFeed}
+            hasAudioFeed={hasAudioFeed}
+            setHasAudioFeed={setHasAudioFeed}
             peerRef={peerRef}
             peerReady={peerReady}
             onFlag={handleFlag}
