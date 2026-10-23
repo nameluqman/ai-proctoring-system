@@ -43,7 +43,7 @@ function getSpoofProbability(logits: Float32Array | Int32Array, dimensions: read
 
 export function useAudioSpoofMonitor(
   microphoneStream: MediaStream | null,
-  onSuspectedSyntheticAudio: (message: string) => void
+  onSuspectedSyntheticAudio: (message: string, confidenceScore?: number) => void
 ) {
   const [status, setStatus] = useState<AudioSpoofMonitorStatus>("inactive");
 
@@ -165,6 +165,7 @@ export function useAudioSpoofMonitor(
 
                 const tensor = new runtime.Tensor("float32", modelInput, [1, MODEL_WINDOW_SAMPLES]);
                 const results = await currentClassifier.run({ [inputName]: tensor });
+                if (cancelled) return;
                 const logits = results[outputName];
                 if (!logits || !(logits.data instanceof Float32Array)) {
                   throw new Error("AASIST-L returned a missing or non-float32 output tensor.");
@@ -177,7 +178,8 @@ export function useAudioSpoofMonitor(
                   if (!alertReported && suspiciousWindows >= REQUIRED_SUSPICIOUS_WINDOWS) {
                     alertReported = true;
                     onSuspectedSyntheticAudio(
-                      `AASIST-L flagged repeated audio windows as possibly synthetic (${Math.round(spoofProbability * 100)}% model score). This experimental signal can be wrong and is not proof of AI use.`
+                      `AASIST-L flagged repeated audio windows as possibly synthetic (${Math.round(spoofProbability * 100)}% model score). This experimental signal can be wrong and is not proof of AI use.`,
+                      spoofProbability
                     );
                   }
                 } else {

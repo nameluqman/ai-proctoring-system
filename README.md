@@ -38,6 +38,14 @@ A production-grade, real-time assessment and remote proctoring platform built wi
 * **Real-time Telemetry Logger:** Centralized event stream with timestamped violation logs.
 * **Automated Evidence Capture:** Automatically captures and stores local screenshot evidence upon critical triggers.
 * **Away-Time Tracking:** Tracks duration and frequency of candidate absence.
+* **Post-Interview Integrity Report:** Candidate can finish the session to stop monitoring and submit timestamped telemetry; the proctor dashboard then links to a scorecard with the 10 violation counters, away/interview duration, interactive timeline, and saved screenshots.
+
+### 5. Integrity Scorecard
+The score starts at 100 and subtracts points for each recorded signal: phone detection (-20), multiple faces (-15), possible synthetic audio (-20), tab switch/window unfocus/no face/display mismatch (-10 each), gaze deviation (-5), and clipboard/mouse departure (-3 each). Away time over 10 seconds subtracts one point for each started 10-second block beyond the threshold, up to 20 points. Scores above 85 are low risk, 60–85 medium risk, and below 60 high risk.
+
+This is a transparent rules-based review aid, not an AI assessment of answer credibility or proof of cheating. Browser/device signals can be inaccurate; away time means time marked away by telemetry, not verified cheating time. Detector model scores are shown only when the detector provides one and are not calibrated probabilities. The report timeline may be capped at 10,000 events; when capped, the report marks it as incomplete while preserving omitted violation counts.
+
+Reports and screenshots are stored as JSON/images under the local `data/interviews/` and `data/evidence/` folders. This filesystem storage is suitable for local development or a single persistent server; multi-instance or ephemeral deployments need shared durable storage. The report API validates payload size, event formats, room identifiers, and same-origin finish requests. The current app has no user authentication, so a room ID is not a substitute for access control; deploy behind authenticated proctor/candidate access before storing sensitive production interviews.
 
 ---
 

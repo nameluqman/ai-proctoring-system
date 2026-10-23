@@ -35,6 +35,7 @@ yarn-error.log*
 
 # Locally stored candidate screenshot evidence
 /data/evidence/
+/data/interviews/
 /public/models/yolo11n.onnx
 /public/models/aasist-l.onnx
 

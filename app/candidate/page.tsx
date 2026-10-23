@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Header from "@/components/shared/Header";
 import Scratchpad from "@/components/candidate/Scratchpad";
 import WebcamFeed from "@/components/candidate/WebcamFeed";
@@ -11,8 +11,12 @@ import { usePresenceTracker } from "@/hooks/usePresenceTracker";
 import { useScreenShare } from "@/hooks/useScreenShare";
 import { useWebcamAI } from "@/hooks/useWebcamAI";
 import { useAudioSpoofMonitor } from "@/hooks/useAudioSpoofMonitor";
-import { AlertCircle, MonitorUp, Square } from "lucide-react";
+import { AlertCircle, CheckCircle2, LoaderCircle, MonitorUp, Square } from "lucide-react";
 import type { MediaConnection } from "peerjs";
+import { INTEGRITY_VIOLATION_TYPES, type EventLog, type IntegrityViolationType } from "@/types/telemetry";
+
+const MAX_STORED_TELEMETRY_EVENTS = 10_000;
+const INTEGRITY_VIOLATION_TYPE_SET = new Set<string>(INTEGRITY_VIOLATION_TYPES);
 
 const MISTAKE_EVENT_TYPES = new Set([
   "TAB_SWITCH",
@@ -24,7 +28,6 @@ const MISTAKE_EVENT_TYPES = new Set([
   "MULTIPLE_FACES_DETECTED",
   "NO_FACE_DETECTED",
   "GAZE_DEVIATION",
-  "AI_LISTENING_DETECTED",
   "SYNTHETIC_AUDIO_SUSPECTED",
   "SHARED_DISPLAY_MISMATCH",
 ]);
@@ -34,7 +37,6 @@ const WEBCAM_EVIDENCE_TYPES = new Set([
   "MULTIPLE_FACES_DETECTED",
   "NO_FACE_DETECTED",
   "GAZE_DEVIATION",
-  "AI_LISTENING_DETECTED",
   "SYNTHETIC_AUDIO_SUSPECTED",
 ]);
 
@@ -57,6 +59,7 @@ function hasAllowedWindowAspectRatio(width: number, height: number) {
 
 function CandidateContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const roomId = searchParams.get("room");
 
   const candidatePeerId = roomId ? `candidate-${roomId}` : "";
@@ -64,16 +67,31 @@ function CandidateContent() {
 
   const { isConnected, peerReady, peerRef, dataConnRef } = usePeer(candidatePeerId, targetProctorId);
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
+  const sessionStartedAtRef = useRef<string | null>(null);
+  const telemetryEventsRef = useRef<EventLog[]>([]);
+  const omittedEventCountRef = useRef(0);
+  const omittedViolationCountsRef = useRef<Partial<Record<IntegrityViolationType, number>>>({});
+  const pendingEvidenceRef = useRef(new Set<Promise<void>>());
+  const isFinishingRef = useRef(false);
+  const finishTimestampRef = useRef<string | null>(null);
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
   const [microphoneStream, setMicrophoneStream] = useState<MediaStream | null>(null);
+  const [monitoringEnabled, setMonitoringEnabled] = useState(true);
+  const [isFinishing, setIsFinishing] = useState(false);
+  const [interviewFinished, setInterviewFinished] = useState(false);
+  const [finishError, setFinishError] = useState<string | null>(null);
   const screenShareVideoRef = useRef<HTMLVideoElement | null>(null);
   const screenCaptureStreamRef = useRef<MediaStream | null>(null);
   const largestViewportRef = useRef<{ width: number; height: number } | null>(null);
   const windowLayoutViolationSinceRef = useRef<number | null>(null);
   const windowLayoutMismatchReportedRef = useRef(false);
 
+  useEffect(() => {
+    sessionStartedAtRef.current ??= new Date().toISOString();
+  }, []);
+
   const captureEvidence = useCallback(
-    async (eventId: string, type: string, message: string) => {
+    async (eventId: string, type: string, message: string, confidenceScore?: number) => {
       if (!roomId) {
         return;
       }
@@ -137,8 +155,15 @@ function CandidateContent() {
       formData.append("eventId", eventId);
       formData.append("type", type);
       formData.append("message", message);
+      if (confidenceScore !== undefined) {
+        formData.append("confidenceScore", String(confidenceScore));
+      }
 
-      const response = await fetch("/api/evidence", { method: "POST", body: formData });
+      const response = await fetch("/api/evidence", {
+        method: "POST",
+        body: formData,
+        signal: AbortSignal.timeout(15_000),
+      });
       if (!response.ok) {
         console.warn("Could not save proctoring evidence:", await response.text());
       }
@@ -148,22 +173,43 @@ function CandidateContent() {
 
   // Send telemetry logs across the PeerJS Data Connection
   const sendTelemetryEvent = useCallback(
-    (type: string, message: string, presenceState?: boolean) => {
+    (type: string, message: string, presenceState?: boolean, confidenceScore?: number) => {
       const eventId = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
+      const event: EventLog = {
+        id: eventId,
+        type,
+        message: message.slice(0, 500),
+        timestamp,
+        ...(presenceState !== undefined ? { presence: presenceState } : {}),
+        ...(confidenceScore !== undefined ? { confidenceScore } : {}),
+      };
+      sessionStartedAtRef.current ??= timestamp;
+
+      if (telemetryEventsRef.current.length < MAX_STORED_TELEMETRY_EVENTS) {
+        telemetryEventsRef.current.push(event);
+      } else {
+        omittedEventCountRef.current += 1;
+        if (INTEGRITY_VIOLATION_TYPE_SET.has(type)) {
+          const violationType = type as IntegrityViolationType;
+          omittedViolationCountsRef.current[violationType] =
+            (omittedViolationCountsRef.current[violationType] ?? 0) + 1;
+        }
+      }
+
       if (dataConnRef.current && dataConnRef.current.open) {
         dataConnRef.current.send({
-          id: eventId,
-          type,
-          message,
-          presence: presenceState,
-          timestamp: new Date().toLocaleTimeString(),
+          ...event,
         });
       }
       if (MISTAKE_EVENT_TYPES.has(type)) {
-        void captureEvidence(eventId, type, message).catch((error) => {
+        const pendingCapture = captureEvidence(eventId, type, message, confidenceScore).catch((error) => {
           console.warn("Could not capture proctoring evidence:", error);
         });
+        pendingEvidenceRef.current.add(pendingCapture);
+        void pendingCapture.finally(() => pendingEvidenceRef.current.delete(pendingCapture));
       }
+      return event;
     },
     [captureEvidence, dataConnRef]
   );
@@ -176,11 +222,12 @@ function CandidateContent() {
     setMicrophoneStream(stream);
   }, []);
   const handleSyntheticAudioSuspected = useCallback(
-    (message: string) => sendTelemetryEvent("SYNTHETIC_AUDIO_SUSPECTED", message),
+    (message: string, confidenceScore?: number) =>
+      sendTelemetryEvent("SYNTHETIC_AUDIO_SUSPECTED", message, undefined, confidenceScore),
     [sendTelemetryEvent]
   );
   const audioSpoofMonitorStatus = useAudioSpoofMonitor(
-    microphoneStream,
+    monitoringEnabled ? microphoneStream : null,
     handleSyntheticAudioSuspected
   );
 
@@ -216,7 +263,9 @@ function CandidateContent() {
     if (screenShareVideoRef.current) {
       screenShareVideoRef.current.srcObject = null;
     }
-    sendTelemetryEvent("SCREEN_SHARE_STOPPED", "Full screen share ended.", true);
+    if (!isFinishingRef.current) {
+      sendTelemetryEvent("SCREEN_SHARE_STOPPED", "Full screen share ended.", true);
+    }
   });
 
   const startPeerMediaCall = useCallback(
@@ -244,6 +293,8 @@ function CandidateContent() {
   );
 
   const handleScreenShareToggle = useCallback(async () => {
+    if (!monitoringEnabled) return;
+
     if (isScreenSharing || isShareActive) {
       stopShare();
       setIsScreenSharing(false);
@@ -270,10 +321,10 @@ function CandidateContent() {
 
     setIsScreenSharing(true);
     startPeerMediaCall(stream, "screen", "SCREEN_SHARE_STARTED", "Candidate started full screen share.");
-  }, [isScreenSharing, isShareActive, sendTelemetryEvent, startShare, stopShare, startPeerMediaCall]);
+  }, [isScreenSharing, isShareActive, monitoringEnabled, sendTelemetryEvent, startShare, stopShare, startPeerMediaCall]);
 
   useEffect(() => {
-    if (!peerReady || !targetProctorId || !microphoneStream) return;
+    if (!monitoringEnabled || !peerReady || !targetProctorId || !microphoneStream) return;
 
     const call = peerRef.current?.call(targetProctorId, microphoneStream, {
       metadata: { source: "audio" },
@@ -291,9 +342,11 @@ function CandidateContent() {
         microphoneCallRef.current = null;
       }
     };
-  }, [peerReady, peerRef, targetProctorId, microphoneStream]);
+  }, [monitoringEnabled, peerReady, peerRef, targetProctorId, microphoneStream]);
 
   useEffect(() => {
+    if (!monitoringEnabled) return;
+
     const checkWindowLayout = () => {
       const width = window.innerWidth;
       const height = window.innerHeight;
@@ -348,17 +401,17 @@ function CandidateContent() {
     checkWindowLayout();
     const interval = window.setInterval(checkWindowLayout, WINDOW_LAYOUT_CHECK_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [sendTelemetryEvent]);
+  }, [monitoringEnabled, sendTelemetryEvent]);
 
   useWebcamAI({
     videoRef: webcamVideoRef,
     onEvent: sendTelemetryEvent,
-    enabled: true,
+    enabled: monitoringEnabled,
     intervalMs: 250,
   });
 
   useEffect(() => {
-    if (!peerReady || !targetProctorId || !webcamStream || isScreenSharing || isShareActive) return;
+    if (!monitoringEnabled || !peerReady || !targetProctorId || !webcamStream || isScreenSharing || isShareActive) return;
 
     startPeerMediaCall(webcamStream, "webcam", "WEBCAM_STARTED", "Live candidate webcam feed initiated.");
 
@@ -366,10 +419,94 @@ function CandidateContent() {
       webcamCallRef.current?.close();
       webcamCallRef.current = null;
     };
-  }, [peerReady, targetProctorId, webcamStream, isScreenSharing, isShareActive, startPeerMediaCall]);
+  }, [monitoringEnabled, peerReady, targetProctorId, webcamStream, isScreenSharing, isShareActive, startPeerMediaCall]);
 
   // Hook for standard visibility change / focus tracking
-  usePresenceTracker({ onEvent: sendTelemetryEvent });
+  usePresenceTracker({ onEvent: sendTelemetryEvent, enabled: monitoringEnabled });
+
+  const handleFinishInterview = useCallback(async () => {
+    if (!roomId || isFinishingRef.current || interviewFinished) return;
+
+    isFinishingRef.current = true;
+    setIsFinishing(true);
+    setFinishError(null);
+    setMonitoringEnabled(false);
+
+    if (isScreenSharing || isShareActive) {
+      sendTelemetryEvent("SCREEN_SHARE_STOPPED", "Screen sharing stopped when the interview was finished.", true);
+    }
+
+    try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      while (pendingEvidenceRef.current.size > 0) {
+        await Promise.allSettled([...pendingEvidenceRef.current]);
+      }
+
+      stopShare();
+      screenCaptureStreamRef.current?.getTracks().forEach((track) => track.stop());
+      screenCaptureStreamRef.current = null;
+      if (screenShareVideoRef.current) screenShareVideoRef.current.srcObject = null;
+      setIsScreenSharing(false);
+
+      webcamCallRef.current?.close();
+      webcamCallRef.current = null;
+      screenShareCallRef.current?.close();
+      screenShareCallRef.current = null;
+      microphoneCallRef.current?.close();
+      microphoneCallRef.current = null;
+      webcamStream?.getTracks().forEach((track) => track.stop());
+      microphoneStream?.getTracks().forEach((track) => track.stop());
+      setWebcamStream(null);
+      setMicrophoneStream(null);
+
+      if (!finishTimestampRef.current) {
+        const finishEvent = sendTelemetryEvent(
+          "INTERVIEW_FINISHED",
+          "Candidate submitted the completed interview.",
+          true
+        );
+        finishTimestampRef.current = finishEvent.timestamp;
+      }
+
+      const response = await fetch("/api/interview/finish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          roomId,
+          startedAt: sessionStartedAtRef.current ?? finishTimestampRef.current,
+          finishedAt: finishTimestampRef.current,
+          events: telemetryEventsRef.current,
+          telemetryTruncated: omittedEventCountRef.current > 0,
+          omittedEventCount: omittedEventCountRef.current,
+          omittedViolationCounts: omittedViolationCountsRef.current,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error || "The interview report could not be saved.");
+      }
+
+      setInterviewFinished(true);
+      router.replace(`/candidate/complete?room=${encodeURIComponent(roomId)}`);
+    } catch (error) {
+      console.error("Could not finish the interview and save its report:", error);
+      setFinishError(error instanceof Error ? error.message : "The interview report could not be saved.");
+    } finally {
+      isFinishingRef.current = false;
+      setIsFinishing(false);
+    }
+  }, [
+    interviewFinished,
+    isScreenSharing,
+    isShareActive,
+    microphoneStream,
+    roomId,
+    router,
+    sendTelemetryEvent,
+    stopShare,
+    webcamStream,
+  ]);
 
   if (!roomId) {
     return (
@@ -381,6 +518,26 @@ function CandidateContent() {
             No active room code detected. Please use the complete link provided by your interviewer.
           </p>
         </div>
+      </div>
+    );
+  }
+
+  if (interviewFinished) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <Header title="Interview Complete" role="candidate" badgeText="Report submitted" badgeType="success" roomId={roomId} />
+        <main className="mx-auto flex min-h-[70vh] max-w-xl items-center justify-center p-6">
+          <section className="w-full rounded-2xl border border-emerald-800/60 bg-slate-900 p-8 text-center">
+            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-400" />
+            <h1 className="mt-4 text-xl font-bold text-white">Interview submitted</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Monitoring has stopped. Your session events, away time, scorecard, and available screenshots were sent to the proctor.
+            </p>
+            <p className="mt-4 text-xs text-slate-500">
+              The integrity score is an automated review signal, not a finding that misconduct occurred.
+            </p>
+          </section>
+        </main>
       </div>
     );
   }
@@ -400,20 +557,38 @@ function CandidateContent() {
           <div className="text-xs text-slate-400 uppercase tracking-[0.2em]">
             Screen sharing is optional; use your microphone for spoken answers
           </div>
-          <button
-            type="button"
-            onClick={handleScreenShareToggle}
-            className={[
-              "inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-all",
-              isScreenSharing || isShareActive
-                ? "border-rose-700 bg-rose-950/60 text-rose-200 hover:bg-rose-900/70"
-                : "border-indigo-700 bg-indigo-950/60 text-indigo-100 hover:bg-indigo-900/70",
-            ].join(" ")}
-          >
-            {isScreenSharing || isShareActive ? <Square className="h-4 w-4" /> : <MonitorUp className="h-4 w-4" />}
-            {isScreenSharing || isShareActive ? "Stop Screen Share" : "Share Screen"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleScreenShareToggle}
+              disabled={!monitoringEnabled}
+              className={[
+                "inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-all",
+                isScreenSharing || isShareActive
+                  ? "border-rose-700 bg-rose-950/60 text-rose-200 hover:bg-rose-900/70"
+                  : "border-indigo-700 bg-indigo-950/60 text-indigo-100 hover:bg-indigo-900/70",
+              ].join(" ")}
+            >
+              {isScreenSharing || isShareActive ? <Square className="h-4 w-4" /> : <MonitorUp className="h-4 w-4" />}
+              {isScreenSharing || isShareActive ? "Stop Screen Share" : "Share Screen"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleFinishInterview()}
+              disabled={isFinishing}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-700 bg-rose-950/60 px-4 py-2.5 text-sm font-semibold text-rose-100 transition hover:bg-rose-900/70 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isFinishing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              {isFinishing ? "Submitting report..." : "Finish Interview"}
+            </button>
+          </div>
         </div>
+
+        {finishError && (
+          <div role="alert" className="rounded-lg border border-rose-700/50 bg-rose-950/30 px-3 py-2 text-xs text-rose-200">
+            {finishError} Monitoring has stopped; you can retry report submission.
+          </div>
+        )}
 
         {shareError && (
           <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
@@ -428,6 +603,7 @@ function CandidateContent() {
             onStream={handleWebcamStream}
             onMicrophoneStream={handleMicrophoneStream}
             audioSpoofMonitorStatus={audioSpoofMonitorStatus}
+            disabled={!monitoringEnabled}
           />
 
           <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 p-3 shadow-[0_18px_50px_rgba(15,23,42,0.4)]">

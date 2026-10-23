@@ -14,7 +14,6 @@ interface MetricsCardsProps {
     multipleFaceCount: number;
     noFaceCount: number;
     gazeDeviationCount: number;
-    aiFocusAlertCount: number;
     syntheticAudioAlertCount: number;
     sharedDisplayMismatchCount: number;
   };
@@ -122,14 +121,6 @@ export default function MetricsCards({ totalViolations, screenAwaySeconds, stats
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase leading-tight text-slate-400">Gaze Dev</p>
           <p className="mt-0.5 text-base font-bold leading-none text-violet-300">{stats.gazeDeviationCount}</p>
-        </div>
-      </div>
-
-      <div className="flex min-h-[66px] items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-2 sm:px-3">
-        <Eye className="h-4 w-4 shrink-0 text-cyan-300" />
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase leading-tight text-slate-400">AI / Focus Alerts</p>
-          <p className="mt-0.5 text-base font-bold leading-none text-cyan-300">{stats.aiFocusAlertCount}</p>
         </div>
       </div>
 

@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import Header from "@/components/shared/Header";
 import MetricsCards from "@/components/proctor/MetricsCards";
 import LiveStreamFeed from "@/components/proctor/LiveStreamFeed";
@@ -52,6 +53,7 @@ function ProctorContent() {
   const [hasLiveFeed, setHasLiveFeed] = useState<boolean>(false);
   const [hasScreenFeed, setHasScreenFeed] = useState<boolean>(false);
   const [hasAudioFeed, setHasAudioFeed] = useState<boolean>(false);
+  const [reportReady, setReportReady] = useState(false);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [evidenceSnapshots, setEvidenceSnapshots] = useState<EvidenceSnapshot[]>([]);
   const [mouseDepartures, setMouseDepartures] = useState(0);
@@ -62,7 +64,6 @@ function ProctorContent() {
   const [multipleFaceCount, setMultipleFaceCount] = useState(0);
   const [noFaceCount, setNoFaceCount] = useState(0);
   const [gazeDeviationCount, setGazeDeviationCount] = useState(0);
-  const [aiFocusAlertCount, setAiFocusAlertCount] = useState(0);
   const [syntheticAudioAlertCount, setSyntheticAudioAlertCount] = useState(0);
   const [sharedDisplayMismatchCount, setSharedDisplayMismatchCount] = useState(0);
   const [screenAwaySeconds, setScreenAwaySeconds] = useState(0);
@@ -80,7 +81,6 @@ function ProctorContent() {
     multipleFaceCount +
     noFaceCount +
     gazeDeviationCount +
-    aiFocusAlertCount +
     syntheticAudioAlertCount +
     sharedDisplayMismatchCount;
 
@@ -123,6 +123,34 @@ function ProctorContent() {
   }, [roomId]);
 
   useEffect(() => {
+    if (reportReady) return;
+
+    let isActive = true;
+
+    const checkForReport = async () => {
+      try {
+        const response = await fetch(
+          `/api/interview/finish?roomId=${encodeURIComponent(roomId)}&status=1`,
+          { cache: "no-store" }
+        );
+        if (response.ok && isActive) setReportReady(true);
+        else if (!response.ok && response.status !== 404) {
+          console.warn("Could not check interview report status:", await response.text());
+        }
+      } catch (error) {
+        console.warn("Could not check interview report status:", error);
+      }
+    };
+
+    void checkForReport();
+    const timer = window.setInterval(checkForReport, 3000);
+    return () => {
+      isActive = false;
+      window.clearInterval(timer);
+    };
+  }, [reportReady, roomId]);
+
+  useEffect(() => {
     const peer = peerRef.current;
     if (!peerReady || !peer) return;
 
@@ -160,8 +188,7 @@ function ProctorContent() {
           data.presence === false &&
           eventType !== "TAB_RETURN" &&
           eventType !== "WINDOW_FOCUS" &&
-          eventType !== "MOUSE_ENTER" &&
-          eventType !== "AI_LISTENING_DETECTED"
+          eventType !== "MOUSE_ENTER"
         ) {
           const awayStartedAt = Date.now();
           activeAwaySinceRef.current ??= awayStartedAt;
@@ -205,9 +232,6 @@ function ProctorContent() {
           case "GAZE_DEVIATION":
             setGazeDeviationCount((c) => c + 1);
             break;
-          case "AI_LISTENING_DETECTED":
-            setAiFocusAlertCount((c) => c + 1);
-            break;
           case "SYNTHETIC_AUDIO_SUSPECTED":
             setSyntheticAudioAlertCount((c) => c + 1);
             break;
@@ -247,7 +271,6 @@ function ProctorContent() {
     setMultipleFaceCount(0);
     setNoFaceCount(0);
     setGazeDeviationCount(0);
-    setAiFocusAlertCount(0);
     setSyntheticAudioAlertCount(0);
     setSharedDisplayMismatchCount(0);
     setScreenAwaySeconds(0);
@@ -268,6 +291,17 @@ function ProctorContent() {
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+        {reportReady && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-800/60 bg-emerald-950/30 p-4">
+            <p className="text-sm text-emerald-100">Candidate submitted the interview. The final report is ready.</p>
+            <Link
+              href={`/proctor/report/${encodeURIComponent(roomId)}`}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-600"
+            >
+              View Integrity Report
+            </Link>
+          </div>
+        )}
         <MetricsCards
           totalViolations={totalMistakes}
           screenAwaySeconds={displayAwaySeconds}
@@ -280,7 +314,6 @@ function ProctorContent() {
             multipleFaceCount,
             noFaceCount,
             gazeDeviationCount,
-            aiFocusAlertCount,
             syntheticAudioAlertCount,
             sharedDisplayMismatchCount,
           }}

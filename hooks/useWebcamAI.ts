@@ -6,7 +6,7 @@ import { estimateHeadPose } from "@/lib/head-pose";
 
 interface UseWebcamAIProps {
   videoRef: RefObject<HTMLVideoElement | null>;
-  onEvent: (type: string, message: string, presenceState?: boolean) => void;
+  onEvent: (type: string, message: string, presenceState?: boolean, confidenceScore?: number) => void;
   enabled?: boolean;
   intervalMs?: number;
 }
@@ -24,7 +24,6 @@ const FACE_LANDMARKER_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const GAZE_YAW_THRESHOLD_DEGREES = 25;
 const GAZE_PITCH_THRESHOLD_DEGREES = 20;
-const SIDE_PANEL_YAW_THRESHOLD_DEGREES = 32;
 
 function prepareYoloInput(
   video: HTMLVideoElement,
@@ -56,7 +55,7 @@ function prepareYoloInput(
   return input;
 }
 
-function containsPhone(output: Float32Array, dimensions: readonly number[]) {
+function getPhoneConfidence(output: Float32Array, dimensions: readonly number[]) {
   if (dimensions.length !== 3 || dimensions[0] !== 1) {
     throw new Error(`Unsupported YOLO output shape: [${dimensions.join(", ")}].`);
   }
@@ -76,6 +75,7 @@ function containsPhone(output: Float32Array, dimensions: readonly number[]) {
       ? output[attribute * candidateCount + candidate]
       : output[candidate * attributeCount + attribute];
 
+  let highestConfidence: number | null = null;
   for (let candidate = 0; candidate < candidateCount; candidate += 1) {
     const phoneScore = read(candidate, classOffset + (classCount === 1 ? 0 : YOLO_PHONE_CLASS_ID));
     const objectness = hasObjectness ? read(candidate, 4) : 1;
@@ -89,11 +89,11 @@ function containsPhone(output: Float32Array, dimensions: readonly number[]) {
       score >= YOLO_PHONE_SCORE_THRESHOLD &&
       relativeArea >= YOLO_MIN_PHONE_AREA
     ) {
-      return true;
+      highestConfidence = Math.max(highestConfidence ?? 0, score);
     }
   }
 
-  return false;
+  return highestConfidence;
 }
 
 async function createYoloSession(): Promise<{
@@ -129,8 +129,8 @@ export function useWebcamAI({
   intervalMs = 400,
 }: UseWebcamAIProps) {
   const emitEvent = useCallback(
-    (type: string, message: string, presenceState?: boolean) => {
-      onEvent(type, message, presenceState);
+    (type: string, message: string, presenceState?: boolean, confidenceScore?: number) => {
+      onEvent(type, message, presenceState, confidenceScore);
     },
     [onEvent]
   );
@@ -148,11 +148,10 @@ export function useWebcamAI({
     let faceDetectionFailed = false;
     let phoneDetectionFailed = false;
     let gazeAlerted = false;
-    let sidePanelAlerted = false;
     let phoneAlerted = false;
     let multiFaceAlerted = false;
     let noFaceAlerted = false;
-    const phoneFrames: boolean[] = [];
+    const phoneFrames: (number | null)[] = [];
     const canvas = document.createElement("canvas");
     const canvasContext = canvas.getContext("2d", { willReadFrequently: true });
     const yoloInput = new Float32Array(3 * YOLO_INPUT_SIZE * YOLO_INPUT_SIZE);
@@ -246,22 +245,27 @@ export function useWebcamAI({
           const outputs = await yoloSession.run({
             [yoloSession.inputNames[0]]: input,
           });
+          if (cancelled) return;
           const result = outputs[yoloSession.outputNames[0]];
           if (!result || !(result.data instanceof Float32Array)) {
             throw new Error("YOLO returned a missing or non-float32 output tensor.");
           }
 
-          phoneFrames.push(containsPhone(result.data, result.dims));
+          phoneFrames.push(getPhoneConfidence(result.data, result.dims));
           if (phoneFrames.length > PHONE_CONFIRMATION_WINDOW) phoneFrames.shift();
           const confirmedPhone =
-            phoneFrames.filter(Boolean).length >= PHONE_CONFIRMATION_COUNT;
+            phoneFrames.filter((confidence): confidence is number => confidence !== null).length >= PHONE_CONFIRMATION_COUNT;
 
           if (confirmedPhone && !phoneAlerted) {
             phoneAlerted = true;
+            const confirmedConfidence = phoneFrames
+              .filter((confidence): confidence is number => confidence !== null)
+              .reduce((highest, confidence) => Math.max(highest, confidence), 0);
             emitEvent(
               "EXTERNAL_DEVICE_DETECTED",
               "YOLO confirmed a phone or extra device across multiple webcam frames.",
-              false
+              false,
+              confirmedConfidence
             );
           } else if (!confirmedPhone && phoneAlerted) {
             phoneAlerted = false;
@@ -303,7 +307,6 @@ export function useWebcamAI({
               emitEvent("NO_FACE_DETECTED", "Candidate is not visible in camera frame.", false);
             }
             gazeAlerted = false;
-            sidePanelAlerted = false;
           } else {
             if (noFaceAlerted) {
               noFaceAlerted = false;
@@ -316,19 +319,6 @@ export function useWebcamAI({
                 const isLookingAway =
                   Math.abs(pose.yaw) > GAZE_YAW_THRESHOLD_DEGREES ||
                   Math.abs(pose.pitch) > GAZE_PITCH_THRESHOLD_DEGREES;
-                const isLookingTowardSidePanel =
-                  Math.abs(pose.yaw) > SIDE_PANEL_YAW_THRESHOLD_DEGREES;
-
-                if (isLookingTowardSidePanel && !sidePanelAlerted) {
-                  sidePanelAlerted = true;
-                  emitEvent(
-                    "AI_LISTENING_DETECTED",
-                    "Candidate head is turned toward a side area; review for off-screen attention.",
-                    false
-                  );
-                } else if (!isLookingTowardSidePanel && sidePanelAlerted) {
-                  sidePanelAlerted = false;
-                }
 
                 if (isLookingAway && !gazeAlerted) {
                   gazeAlerted = true;

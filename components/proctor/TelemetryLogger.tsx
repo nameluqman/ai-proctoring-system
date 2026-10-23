@@ -8,6 +8,11 @@ interface TelemetryLoggerProps {
   evidenceSnapshots: EvidenceSnapshot[];
 }
 
+function formatTimestamp(timestamp: string) {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleTimeString();
+}
+
 export default function TelemetryLogger({ logs, scratchpadText = "", evidenceSnapshots }: TelemetryLoggerProps) {
   return (
     <div className="bg-slate-900/80 border border-slate-700/80 rounded-2xl p-5 shadow-[0_18px_50px_rgba(15,23,42,0.35)] backdrop-blur-sm">
@@ -52,7 +57,7 @@ export default function TelemetryLogger({ logs, scratchpadText = "", evidenceSna
                       </span>
                     )}
                   </div>
-                  <span className="text-[10px] text-slate-500 font-mono">{log.timestamp}</span>
+                  <span className="text-[10px] text-slate-500 font-mono">{formatTimestamp(log.timestamp)}</span>
                 </div>
                 <p className={isNewest ? "mt-2 text-amber-100" : "mt-2 text-slate-300"}>{log.message}</p>
               </div>
@@ -97,9 +102,7 @@ export default function TelemetryLogger({ logs, scratchpadText = "", evidenceSna
                     <p className="mt-1 line-clamp-2 text-[10px] text-slate-300">
                       {snapshot.message}
                     </p>
-                    <p className="mt-1 text-[9px] text-slate-500 font-mono">
-                      {snapshot.timestamp}
-                    </p>
+                    <p className="mt-1 text-[9px] text-slate-500 font-mono">{formatTimestamp(snapshot.timestamp)}</p>
                   </div>
                 </a>
               ))}

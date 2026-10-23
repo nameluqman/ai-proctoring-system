@@ -9,6 +9,7 @@ interface WebcamFeedProps {
   onStream: (stream: MediaStream) => void;
   onMicrophoneStream: (stream: MediaStream | null) => void;
   audioSpoofMonitorStatus: AudioSpoofMonitorStatus;
+  disabled?: boolean;
 }
 
 export default function WebcamFeed({
@@ -16,6 +17,7 @@ export default function WebcamFeed({
   onStream,
   onMicrophoneStream,
   audioSpoofMonitorStatus,
+  disabled = false,
 }: WebcamFeedProps) {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [microphoneStream, setMicrophoneStream] = useState<MediaStream | null>(null);
@@ -167,7 +169,7 @@ export default function WebcamFeed({
         <button
           type="button"
           onClick={() => void toggleMicrophone()}
-          disabled={microphoneLoading}
+          disabled={microphoneLoading || disabled}
           aria-pressed={microphoneStream !== null}
           className={[
             "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition",
